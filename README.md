@@ -3,7 +3,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/netroutines/organization-name-mapper?label=latest%20release)](https://github.com/netroutines/organization-name-mapper/releases/latest)
 [![Tests](https://github.com/netroutines/organization-name-mapper/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/netroutines/organization-name-mapper/actions/workflows/tests.yml)
 [![License](https://img.shields.io/github/license/netroutines/organization-name-mapper)](LICENSE)
-![Keycloak](https://img.shields.io/badge/Keycloak%20built%20against-26.7.3-blue)
+![Keycloak build baseline (main)](https://img.shields.io/badge/Keycloak%20built%20against-26.8.2-blue)
 ![Java bytecode](https://img.shields.io/badge/Java%20bytecode-17-blue)
 
 Custom OIDC protocol mapper that adds the organization display name to an existing structured Keycloak `organization`
@@ -74,12 +74,13 @@ even when the alias was not selected by the built-in `Organization Membership` m
 | Mapper version | Built against | Runtime verified on |
 |----------------|---------------|---------------------|
 | 1.0.0          | 26.7.3        | 26.7.3              |
+| 1.0.1          | 26.8.2        | 26.8.2    |
 
 The provider version and the Keycloak version are independent.
 
-Version `1.0.0` was compiled against and runtime-tested on Keycloak `26.7.3`. This is the initial verified compatibility
-baseline; it does not imply that earlier Keycloak versions are incompatible or that all later versions are automatically
-compatible.
+Each provider release is built against a specific Keycloak version and may be runtime-verified against one or more
+Keycloak versions, as documented in the compatibility table above. Verified compatibility with a particular Keycloak
+version does not imply compatibility with earlier or later versions.
 
 The same released provider JAR may also work unchanged with later Keycloak versions. A Keycloak version should be
 considered runtime-verified only after the released JAR has been tested against that version.
@@ -103,10 +104,15 @@ This section is intended for operators integrating a released provider JAR into 
 
 Use a provider release whose runtime compatibility has been verified for the Keycloak version used by the deployment.
 
-Copy the JAR into the Keycloak providers directory before building the server image:
+Download the corresponding release JAR. Its filename follows this convention:
+
+`organization-name-mapper-<provider-version>.jar`
+
+Replace `<provider-version>` with the actual version of the downloaded provider release in the following Dockerfile
+example:
 
 ```dockerfile
-COPY organization-name-mapper-1.0.0.jar /opt/keycloak/providers/
+COPY organization-name-mapper-<provider-version>.jar /opt/keycloak/providers/
 RUN /opt/keycloak/bin/kc.sh build
 ```
 
@@ -148,8 +154,9 @@ sufficient.
 For lightweight access tokens, enable `Add to lightweight access token` on both mappers. That setting is separate from
 regular Access Token inclusion and defaults to disabled.
 
-For Keycloak 26.7.3, keep `Multivalued` enabled and use a structured organization claim, for example by enabling
-`Add organization id` or `Add organization attributes`.
+When configuring the standard `Organization Membership` mapper, keep `Multivalued` enabled and use a structured
+organization claim, for example by enabling `Add organization id` or `Add organization attributes`, where these options
+are available in the deployed Keycloak version.
 
 Verify that the generated token contains:
 
@@ -174,12 +181,7 @@ This section is intended for building, testing, validating compatibility, and re
 
 ### Build and test
 
-The provider version and Keycloak build-time dependency version must be explicitly defined in `pom.xml`, for example:
-
-```xml
-<version>1.0.0</version>
-<keycloak.version>26.7.3</keycloak.version>
-```
+The provider version and Keycloak build-time dependency version must be explicitly defined in `pom.xml`.
 
 Do not dynamically determine the Keycloak dependency version for a release build. The committed `pom.xml` must identify
 the exact Keycloak version against which that provider artifact was compiled.
@@ -201,18 +203,39 @@ mvn clean package
 
 `mvn clean package` already executes the test suite, so running `mvn clean test` immediately before it is optional.
 
-For version `1.0.0`, the generated artifact is:
+The generated artifact follows this naming convention:
 
-```text
-target/organization-name-mapper-1.0.0.jar
-```
+`target/organization-name-mapper-<provider-version>.jar`
 
 ### Verify the build
 
-After the final build, inspect the JAR contents:
+After the final build, inspect the JAR contents and calculate its SHA-256 checksum. The following commands locate the
+versioned JAR automatically; they expect exactly one provider JAR in `target`.
+
+#### Linux
 
 ```bash
-jar tf target/organization-name-mapper-1.0.0.jar
+set -- target/organization-name-mapper-*.jar
+if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+  echo "Expected exactly one provider JAR in target/" >&2
+  exit 1
+fi
+
+jar tf "$1"
+sha256sum "$1"
+```
+
+#### Windows (PowerShell)
+
+```powershell
+$jars = @(Get-ChildItem .\target\organization-name-mapper-*.jar -File)
+
+if ($jars.Count -ne 1) {
+    throw "Expected exactly one provider JAR in target/"
+}
+
+jar tf $jars[0].FullName
+Get-FileHash $jars[0].FullName -Algorithm SHA256
 ```
 
 The JAR should contain at least:
@@ -221,20 +244,6 @@ The JAR should contain at least:
 io/github/netroutines/keycloak/mapper/OrganizationNameProtocolMapper.class
 META-INF/services/org.keycloak.protocol.ProtocolMapper
 META-INF/LICENSE
-```
-
-Calculate the SHA-256 checksum only after the final build.
-
-#### Linux
-
-```bash
-sha256sum target/organization-name-mapper-1.0.0.jar
-```
-
-#### Windows
-
-```powershell
-Get-FileHash .\target\organization-name-mapper-1.0.0.jar -Algorithm SHA256
 ```
 
 Do not rebuild the artifact after recording the checksum for a release.
@@ -263,31 +272,18 @@ Recommended procedure:
    ```
 
 9. Optionally validate source-level compatibility against the target Keycloak dependencies without changing the
-   committed build baseline:
+   committed build baseline. Replace `<target-keycloak-version>` with the version being evaluated:
 
    ```bash
-   mvn -Dkeycloak.version=<target-keycloak-version> clean test
+   mvn "-Dkeycloak.version=<target-keycloak-version>" clean test
    ```
 
 If the unchanged released JAR works correctly, no new provider release is required. The target Keycloak version can be
 recorded as an additionally runtime-verified version for that provider release.
 
-If the existing JAR is incompatible, or if source changes or recompilation against new Keycloak APIs are required,
-create a new provider release.
-
-For example, if compatibility with Keycloak `26.8.0` requires rebuilding or changing the provider, the new release could
-use:
-
-```xml
-<version>1.0.1</version>
-<keycloak.version>26.8.0</keycloak.version>
-```
-
-and produce:
-
-```text
-organization-name-mapper-1.0.1.jar
-```
+If the existing JAR is incompatible with the target Keycloak version, or if source changes or recompilation against
+new Keycloak APIs are required, update the provider version and build-time Keycloak dependency in `pom.xml`, then create
+a new provider release.
 
 The provider version should reflect changes to this provider, not merely the fact that the deployed Keycloak version
 changed.
@@ -310,7 +306,7 @@ For each new provider release:
 4. Inspect the generated JAR.
 5. Calculate its SHA-256 checksum.
 6. Commit the release changes.
-7. Create the corresponding Git tag using the provider version, for example `1.0.1`.
+7. Create the corresponding Git tag using the provider version.
 8. Create a GitHub release from that tag.
 9. Attach the exact JAR that was verified.
 10. Include the build-time Keycloak version, runtime-verified Keycloak versions, and SHA-256 checksum in the release
